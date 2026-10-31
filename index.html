@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADAQuant · the streaming lane, live</title>
+<meta name="description" content="ADAQuant's Kafka streaming lane running in your browser on Binance's live ADA feed: closed candles, 5-minute VWAP windows and the SNS alert rules. Plus four years of the gold layer.">
+<link rel="icon" href="web/rhino.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --night: #061e29; --deep: #0a2a38; --ocean: #1d546d; --sea: #5f9598; --mist: #f3f4f4;
+    --dim: #8fb3b6; --line: rgba(95, 149, 152, 0.28); --hot: #ffd27a; --red: #ff7b7b; --green: #7be0b4;
+    --sans: "Sora", system-ui, sans-serif; --mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--night); }
+  body { margin: 0; color: var(--mist); font-family: var(--sans); font-weight: 300; line-height: 1.55;
+    background: radial-gradient(1200px 600px at 80% -10%, rgba(29, 84, 109, 0.55), transparent 70%), var(--night); min-height: 100vh; }
+  #sky { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+  .wrap { position: relative; z-index: 1; max-width: 1240px; margin: 0 auto; padding: 0 clamp(1rem, 3vw, 2rem) 4rem; }
+  a { color: var(--mist); }
+
+  header.top { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1.1rem 0; border-bottom: 1px solid var(--line); }
+  .wordmark { height: 56px; border-radius: 6px; width: auto; display: block; mix-blend-mode: screen; }
+  .status { display: flex; align-items: center; gap: 0.6rem; font-family: var(--mono); font-size: 0.8rem; color: var(--dim); }
+  .pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--sea); box-shadow: 0 0 0 0 rgba(123, 224, 180, 0.6); }
+  .status.live .pulse { background: var(--green); animation: beat 1.6s infinite; }
+  .status.sim .pulse { background: var(--hot); }
+  @keyframes beat { 70% { box-shadow: 0 0 0 9px rgba(123, 224, 180, 0); } 100% { box-shadow: 0 0 0 0 rgba(123, 224, 180, 0); } }
+
+  .hero { display: grid; grid-template-columns: 1.25fr 1fr; gap: 2rem; align-items: end; padding: 2.5rem 0 1.5rem; }
+  .hero h1 { font-weight: 600; font-size: clamp(2rem, 4.2vw, 3.3rem); line-height: 1.06; letter-spacing: -0.02em; margin: 0 0 0.9rem; }
+  .hero p { color: var(--dim); max-width: 36rem; margin: 0; }
+  .ticker { justify-self: end; text-align: right; position: relative; }
+  .ticker img { position: absolute; right: -10px; bottom: 28px; width: min(340px, 80%); opacity: 0.16; pointer-events: none; }
+  .price { font-family: var(--mono); font-size: clamp(2.6rem, 6vw, 4.4rem); font-weight: 500; letter-spacing: -0.03em; line-height: 1; position: relative; }
+  .price small { font-size: 0.35em; color: var(--dim); margin-left: 0.4rem; letter-spacing: 0; }
+  .sub { font-family: var(--mono); font-size: 0.82rem; color: var(--dim); margin-top: 0.4rem; position: relative; }
+  .up { color: var(--green); } .down { color: var(--red); }
+
+  h2 { font-weight: 600; font-size: 1.05rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--sea); margin: 2.6rem 0 0.9rem; display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap; }
+  h2 span { text-transform: none; letter-spacing: 0; font-weight: 300; color: var(--dim); font-size: 0.92rem; }
+
+  /* the pipeline strip */
+  .pipe { background: rgba(10, 42, 56, 0.65); border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
+  .pipe svg { display: block; width: 100%; min-width: 900px; height: auto; font-family: var(--mono); }
+  .pnode rect { fill: var(--deep); stroke: var(--ocean); stroke-width: 1.4; rx: 8; }
+  .pnode .t1 { fill: var(--mist); font-size: 12px; font-weight: 500; }
+  .pnode .t2 { fill: var(--dim); font-size: 10.5px; }
+  .pnode .n { fill: var(--hot); font-size: 11px; }
+  .pnode.topic rect { stroke: var(--sea); stroke-dasharray: 4 3; }
+  .pedge { stroke: var(--ocean); stroke-width: 1.5; fill: none; }
+  .packet { fill: var(--hot); }
+  .packet.drop { fill: var(--red); }
+
+  .grid { display: grid; grid-template-columns: 1.55fr 1fr; gap: 1rem; margin-top: 1rem; }
+  .card { background: rgba(10, 42, 56, 0.72); border: 1px solid var(--line); border-radius: 10px; padding: 1rem 1.1rem; min-width: 0; }
+  .card h3 { margin: 0 0 0.6rem; font-size: 0.82rem; font-weight: 500; font-family: var(--mono); color: var(--dim); display: flex; justify-content: space-between; gap: 0.5rem; }
+  .card h3 b { color: var(--mist); font-weight: 500; }
+  canvas.chart { display: block; width: 100%; height: 380px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-family: var(--mono); font-size: 0.72rem; color: var(--dim); margin-top: 0.4rem; }
+  .legend i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 0.35rem; }
+
+  .tail { font-family: var(--mono); font-size: 11.5px; line-height: 1.5; height: 180px; overflow: hidden; display: flex; flex-direction: column; gap: 0.35rem; }
+  .msg { border-left: 2px solid var(--ocean); padding: 0.15rem 0 0.15rem 0.55rem; color: #cfe1e2; animation: drop 0.5s ease; word-break: break-all; }
+  .msg .meta { color: var(--sea); display: block; font-size: 10.5px; }
+  .msg.partial { opacity: 0.55; border-left-style: dashed; }
+  @keyframes drop { from { opacity: 0; transform: translateY(-6px); } }
+
+  .rules { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-top: 1rem; }
+  .rule { background: rgba(10, 42, 56, 0.72); border: 1px solid var(--line); border-radius: 10px; padding: 0.9rem 1rem; }
+  .rule .name { font-family: var(--mono); font-size: 0.72rem; color: var(--sea); letter-spacing: 0.05em; }
+  .rule .what { font-size: 0.95rem; margin: 0.2rem 0 0.5rem; }
+  .rule .val { font-family: var(--mono); font-size: 1.5rem; }
+  .rule .state { font-family: var(--mono); font-size: 0.72rem; color: var(--dim); }
+  .rule.fired { border-color: var(--hot); box-shadow: 0 0 0 1px var(--hot) inset; }
+  .rule.fired .state { color: var(--hot); }
+  .mail { margin-top: 1rem; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; background: var(--mist); color: #12303b; border-radius: 8px; padding: 0.9rem 1rem; display: none; }
+  .mail b { display: block; font-weight: 500; margin-bottom: 0.4rem; }
+  .quiet { font-family: var(--mono); font-size: 0.8rem; color: var(--dim); margin-top: 0.8rem; }
+
+  /* batch lane */
+  .medal { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; margin-top: 1rem; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .medal div { padding: 0.8rem 1rem; background: rgba(10, 42, 56, 0.72); border-right: 1px solid var(--line); }
+  .medal div:last-child { border-right: 0; }
+  .medal b { display: block; font-size: 0.95rem; font-weight: 600; }
+  .medal span { font-family: var(--mono); font-size: 0.75rem; color: var(--dim); }
+  .medal .bronze b { color: #d9a47a; } .medal .silver b { color: #c9d4d6; } .medal .gold b { color: var(--hot); } .medal .sum b { color: var(--green); }
+  .batch { display: grid; grid-template-columns: 1.55fr 1fr; gap: 1rem; margin-top: 1rem; }
+  #months { display: block; width: 100%; height: auto; font-family: var(--mono); }
+  #months .m { cursor: pointer; }
+  #months .m:hover rect.hit, #months .m.sel rect.hit { fill: rgba(95, 149, 152, 0.16); }
+  .row pre { font-family: var(--mono); font-size: 11.5px; margin: 0; white-space: pre-wrap; color: #cfe1e2; }
+  .path { font-family: var(--mono); font-size: 11px; color: var(--hot); margin-bottom: 0.6rem; word-break: break-all; }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--line); font-family: var(--mono); font-size: 0.75rem; color: var(--dim); display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+
+  @media (max-width: 900px) {
+    .hero, .grid, .batch { grid-template-columns: 1fr; }
+    .ticker { justify-self: start; text-align: left; }
+    .rules { grid-template-columns: 1fr 1fr; }
+    .medal { grid-template-columns: 1fr 1fr; }
+    .medal div:nth-child(2) { border-right: 0; } .medal div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+    canvas.chart { height: 300px; }
+    .wordmark { height: 34px; }
+    .ticker img { display: none; }
+    .rule .val { font-size: 1.1rem; }
+    .status { font-size: 0.7rem; text-align: right; }
+  }
+</style>
+</head>
+<body>
+<canvas id="sky" aria-hidden="true"></canvas>
+<div class="wrap">
+  <header class="top">
+    <img class="wordmark" src="web/wordmark.jpg" alt="ADAQuant">
+    <div class="status" id="status"><span class="pulse"></span><span id="statusText">connecting to Binance…</span></div>
+  </header>
+
+  <section class="hero">
+    <div>
+      <h1>Every minute, one candle travels through the pipeline.</h1>
+      <p>This page plays the streaming lane of ADAQuant on Binance’s live ADA/USDT feed. It is our Kafka producer, the Glue Streaming VWAP job and the SNS alert rules, ported line by line to JavaScript. <span id="realness">The price you see is real.</span> The topics are this tab’s own.</p>
+    </div>
+    <div class="ticker">
+      <img src="web/rhino.png" alt="">
+      <div class="price" id="price">—<small>USDT</small></div>
+      <div class="sub" id="change">waiting for the first candle</div>
+    </div>
+  </section>
+
+  <h2>Streaming lane <span>Binance → Kafka → Glue Streaming → Timestream → SNS</span></h2>
+  <div class="pipe"><svg id="pipe" viewBox="0 0 1180 170" aria-label="Streaming pipeline"></svg></div>
+
+  <div class="grid">
+    <div class="card">
+      <h3><span>ADAUSDT · 1-minute closes · the last 250, which is what <b>sns_alerts.py</b> reads</span><span id="clock"></span></h3>
+      <canvas class="chart" id="chart"></canvas>
+      <div class="legend"><span><i style="background:#f3f4f4"></i>close</span><span><i style="background:#ffd27a"></i>VWAP, 5-min window</span><span><i style="background:#7be0b4"></i>EMA50</span><span><i style="background:#5f9598"></i>SMA200</span><span><i style="background:#ff7b7b"></i>RSI outside 30–70</span></div>
+    </div>
+    <div class="card">
+      <h3><span>topic <b>imat3a-ADA</b></span><span id="off1">offset 0</span></h3>
+      <div class="tail" id="tail1"></div>
+      <h3 style="margin-top:0.9rem"><span>topic <b>imat3a-ADA-VWAP</b></span><span id="off2">offset 0</span></h3>
+      <div class="tail" id="tail2"></div>
+    </div>
+  </div>
+
+  <h2>Alert rules <span>evaluated after every closed candle, as <code>sns_alerts.py</code> does every 60 s</span></h2>
+  <div class="rules" id="rules"></div>
+  <div class="mail" id="mail"></div>
+  <p class="quiet" id="quiet"></p>
+
+  <h2>Batch lane <span>four years of daily candles, bronze → silver → gold → monthly summary</span></h2>
+  <div class="medal">
+    <div class="bronze"><b>Bronze</b><span>96 CSV objects from TradingView, 2022-01 to 2025-12, one prefix per month</span></div>
+    <div class="silver"><b>Silver</b><span>typed and de-duplicated Parquet, partitioned by year and month</span></div>
+    <div class="gold"><b>Gold</b><span>SMA200 · EMA50 · RSI14 · MACD · ATR on every day</span></div>
+    <div class="sum"><b>Summary</b><span>48 monthly rows, the table below</span></div>
+  </div>
+  <div class="batch">
+    <div class="card">
+      <h3><span>monthly average close with min–max band · days with RSI above 70 and below 30 · <b style="color:#7be0b4">▲</b> golden and <b style="color:#ff7b7b">▼</b> death crosses</span><span>click a month</span></h3>
+      <svg id="months" viewBox="0 0 760 360" aria-label="Monthly summary chart"></svg>
+    </div>
+    <div class="card row">
+      <h3><span>row from the summary table</span></h3>
+      <div class="path" id="rowPath"></div>
+      <pre id="rowJson"></pre>
+    </div>
+  </div>
+
+  <footer><span>ADAQuant · Sergio Fernández Cordero, Alejandro Alcázar Mendoza, Liam Esgueva · Comillas ICAI 2026</span><a href="https://github.com/liiiaamm/adaquant">Code on GitHub</a></footer>
+</div>
+<script src="web/lane.js"></script>
+<script src="web/app.js"></script>
+</body>
+</html>
