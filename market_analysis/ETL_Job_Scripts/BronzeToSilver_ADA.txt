@@ -1,0 +1,120 @@
+import sys
+from awsglue.transforms import ApplyMapping
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsgluedq.transforms import EvaluateDataQuality
+from awsglue import DynamicFrame
+
+
+def spark_sql_query(glue_context, spark_session, query, mapping, transformation_ctx):
+    for alias, frame in mapping.items():
+        frame.toDF().createOrReplaceTempView(alias)
+
+    result = spark_session.sql(query)
+    return DynamicFrame.fromDF(result, glue_context, transformation_ctx)
+
+
+args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+
+job = Job(glueContext)
+job.init(args["JOB_NAME"], args)
+
+
+DEFAULT_DATA_QUALITY_RULESET = """
+Rules = [
+    ColumnCount > 0
+]
+"""
+
+
+bronze_frame = glueContext.create_dynamic_frame.from_catalog(
+    database="trade_data_imat3a02",
+    table_name="bronze_ada_ada",
+)
+
+
+silver_schema_frame = ApplyMapping.apply(
+    frame=bronze_frame,
+    mappings=[
+        ("symbol", "string", "symbol", "string"),
+        ("open", "double", "open", "double"),
+        ("high", "double", "high", "double"),
+        ("low", "double", "low", "double"),
+        ("close", "double", "close", "double"),
+        ("volume", "double", "volume", "double"),
+        ("day", "long", "day", "long"),
+        ("year", "string", "year", "int"),
+        ("month", "string", "month", "int"),
+    ],
+)
+
+
+sql_query = """
+SELECT
+    to_timestamp(
+        concat(
+            cast(year as string), '-',
+            lpad(cast(month as string), 2, '0'), '-',
+            lpad(cast(day as string), 2, '0'),
+            ' 00:00:00'
+        )
+    ) AS trade_ts,
+    symbol,
+    open,
+    high,
+    low,
+    close,
+    volume,
+    day,
+    month,
+    year
+FROM myDataSource
+"""
+
+
+silver_frame = spark_sql_query(
+    glueContext,
+    spark,
+    query=sql_query,
+    mapping={"myDataSource": silver_schema_frame},
+    transformation_ctx="silver_sql_transform",
+)
+
+
+EvaluateDataQuality().process_rows(
+    frame=silver_frame,
+    ruleset=DEFAULT_DATA_QUALITY_RULESET,
+    publishing_options={
+        "dataQualityEvaluationContext": "silver_data_quality",
+        "enableDataQualityResultsPublishing": True,
+    },
+    additional_options={
+        "dataQualityResultsPublishing.strategy": "BEST_EFFORT",
+        "observations.scope": "ALL",
+    },
+)
+
+
+sink = glueContext.getSink(
+    path="s3://adaquant-data-bucket/silver/ada/",
+    connection_type="s3",
+    updateBehavior="UPDATE_IN_DATABASE",
+    partitionKeys=["year", "month"],
+    enableUpdateCatalog=True,
+)
+
+sink.setCatalogInfo(
+    catalogDatabase="trade_data_imat3a02",
+    catalogTableName="silver_ada_ada",
+)
+
+sink.setFormat("glueparquet", compression="snappy")
+sink.writeFrame(silver_frame)
+
+job.commit()

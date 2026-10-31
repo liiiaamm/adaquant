@@ -1,0 +1,20 @@
+# ─── Python ──────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+
+# ─── Virtual environments ────────────────────────────────────────────────
+venv/
+.venv/
+*_venv/
+env/
+
+# ─── AWS credentials ─────────────────────────────────────────────────────
+.aws/
+
+# ─── Secrets and local config ────────────────────────────────────────────
+.env
+client.properties
+
+# ─── Generated outputs ───────────────────────────────────────────────────
+market_analysis/*.html
+.DS_Store

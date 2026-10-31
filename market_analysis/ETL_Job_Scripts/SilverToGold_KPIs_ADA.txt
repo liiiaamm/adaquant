@@ -1,0 +1,195 @@
+import sys
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from awsglue import DynamicFrame
+from pyspark.sql.types import (
+    StructType,
+    StructField,
+    StringType,
+    DoubleType,
+    TimestampType,
+    IntegerType,
+    LongType,
+)
+
+import pandas as pd
+import numpy as np
+
+
+args = getResolvedOptions(sys.argv, ["JOB_NAME"])
+
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+
+job = Job(glueContext)
+job.init(args["JOB_NAME"], args)
+
+
+silver_dyf = glueContext.create_dynamic_frame.from_catalog(
+    database="trade_data_imat3a02",
+    table_name="silver_ada_ada",
+)
+
+pdf = silver_dyf.toDF().toPandas()
+pdf["trade_ts"] = pd.to_datetime(pdf["trade_ts"])
+pdf = pdf.sort_values("trade_ts").reset_index(drop=True)
+
+numeric_cols = ["close", "open", "high", "low", "volume", "day", "month", "year"]
+for col in numeric_cols:
+    pdf[col] = pd.to_numeric(pdf[col], errors="coerce")
+
+close = pdf["close"].values
+n = len(close)
+
+
+# --- SMA 200 ---
+pdf["sma_200"] = pdf["close"].rolling(window=200, min_periods=200).mean()
+
+
+# --- EMA 50 ---
+k50 = 2.0 / (50 + 1)
+ema_50 = np.full(n, np.nan)
+
+if n >= 50:
+    ema_50[49] = np.mean(close[:50])
+    for i in range(50, n):
+        ema_50[i] = close[i] * k50 + ema_50[i - 1] * (1 - k50)
+
+pdf["ema_50"] = ema_50
+
+
+# --- RSI (14) ---
+period_rsi = 14
+rsi = np.full(n, np.nan)
+
+if n > period_rsi:
+    deltas = np.diff(close)
+    gains = np.where(deltas > 0, deltas, 0.0)
+    losses = np.where(deltas < 0, -deltas, 0.0)
+
+    avg_gain = np.mean(gains[:period_rsi])
+    avg_loss = np.mean(losses[:period_rsi])
+
+    rsi[period_rsi] = 100.0 if avg_loss == 0 else 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
+
+    for i in range(period_rsi, n - 1):
+        avg_gain = (avg_gain * (period_rsi - 1) + gains[i]) / period_rsi
+        avg_loss = (avg_loss * (period_rsi - 1) + losses[i]) / period_rsi
+
+        rsi[i + 1] = 100.0 if avg_loss == 0 else 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
+
+pdf["rsi"] = rsi
+
+
+# --- MACD ---
+k12 = 2.0 / (12 + 1)
+k26 = 2.0 / (26 + 1)
+k9 = 2.0 / (9 + 1)
+
+ema_12 = np.full(n, np.nan)
+ema_26 = np.full(n, np.nan)
+macd_line = np.full(n, np.nan)
+macd_signal = np.full(n, np.nan)
+macd_histogram = np.full(n, np.nan)
+
+if n >= 26:
+    ema_12[11] = np.mean(close[:12])
+    for i in range(12, n):
+        ema_12[i] = close[i] * k12 + ema_12[i - 1] * (1 - k12)
+
+    ema_26[25] = np.mean(close[:26])
+    for i in range(26, n):
+        ema_26[i] = close[i] * k26 + ema_26[i - 1] * (1 - k26)
+
+    for i in range(25, n):
+        if not (np.isnan(ema_12[i]) or np.isnan(ema_26[i])):
+            macd_line[i] = ema_12[i] - ema_26[i]
+
+    valid_macd = [(i, macd_line[i]) for i in range(n) if not np.isnan(macd_line[i])]
+
+    if len(valid_macd) >= 9:
+        seed_idx = valid_macd[8][0]
+        macd_signal[seed_idx] = np.mean([v for _, v in valid_macd[:9]])
+        macd_histogram[seed_idx] = macd_line[seed_idx] - macd_signal[seed_idx]
+
+        prev_sig = macd_signal[seed_idx]
+
+        for j in range(9, len(valid_macd)):
+            idx = valid_macd[j][0]
+            macd_signal[idx] = valid_macd[j][1] * k9 + prev_sig * (1 - k9)
+            macd_histogram[idx] = macd_line[idx] - macd_signal[idx]
+            prev_sig = macd_signal[idx]
+
+pdf["macd_line"] = macd_line
+pdf["macd_signal"] = macd_signal
+pdf["macd_histogram"] = macd_histogram
+
+
+pdf_final = pdf[
+    [
+        "trade_ts",
+        "symbol",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "day",
+        "month",
+        "year",
+        "sma_200",
+        "ema_50",
+        "rsi",
+        "macd_line",
+        "macd_signal",
+        "macd_histogram",
+    ]
+].copy()
+
+pdf_final = pdf_final.where(pdf_final.notna(), other=None)
+
+
+gold_schema = StructType(
+    [
+        StructField("trade_ts", TimestampType(), True),
+        StructField("symbol", StringType(), True),
+        StructField("open", DoubleType(), True),
+        StructField("high", DoubleType(), True),
+        StructField("low", DoubleType(), True),
+        StructField("close", DoubleType(), True),
+        StructField("volume", DoubleType(), True),
+        StructField("day", LongType(), True),
+        StructField("month", IntegerType(), True),
+        StructField("year", IntegerType(), True),
+        StructField("sma_200", DoubleType(), True),
+        StructField("ema_50", DoubleType(), True),
+        StructField("rsi", DoubleType(), True),
+        StructField("macd_line", DoubleType(), True),
+        StructField("macd_signal", DoubleType(), True),
+        StructField("macd_histogram", DoubleType(), True),
+    ]
+)
+
+spark_df = spark.createDataFrame(pdf_final, schema=gold_schema)
+gold_dyf = DynamicFrame.fromDF(spark_df, glueContext, "gold_dyf")
+
+gold_sink = glueContext.getSink(
+    path="s3://adaquant-data-bucket/gold/ada/",
+    connection_type="s3",
+    updateBehavior="UPDATE_IN_DATABASE",
+    partitionKeys=["year", "month"],
+    enableUpdateCatalog=True,
+)
+
+gold_sink.setCatalogInfo(
+    catalogDatabase="trade_data_imat3a02",
+    catalogTableName="gold_ada_ada",
+)
+
+gold_sink.setFormat("glueparquet", compression="snappy")
+gold_sink.writeFrame(gold_dyf)
+
+job.commit()
